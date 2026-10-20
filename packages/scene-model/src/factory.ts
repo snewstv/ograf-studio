@@ -446,6 +446,7 @@ export function createFieldDefinitionFromInput(input: FieldSchemaInput): FieldDe
     fileExtensions: input.fileExtensions ?? [],
     properties,
     ...(items !== undefined ? { items } : {}),
+    ...(input.volkBinding !== undefined ? { volkBinding: input.volkBinding } : {}),
     ...(input.defaultValue !== undefined
       ? { defaultValue: input.defaultValue }
       : { defaultValue: defaultValueForFieldType(input.fieldType, options) }),

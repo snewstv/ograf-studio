@@ -661,6 +661,18 @@ export interface FieldConstraints {
   maxItems?: number;
 }
 
+/** Vendor live-data binding for Volk/Souv autocomplete. Compiles into manifest `schema` as `v_volk`. */
+export interface VolkFieldBinding {
+  /** Catalog source, e.g. `weather.currentTemp`, `sport.homeScore`, `election.votos`. */
+  source: string;
+  /** Source parameters, e.g. `{ latitude, longitude }`, `{ leagueID, seasonDate }`. */
+  params?: Record<string, string | number | boolean>;
+  /** Fallback default used when the live source is unavailable. */
+  fallback?: FieldValue;
+  /** When true, Volk should refresh from the live source on each playout. */
+  live?: boolean;
+}
+
 /** One dynamic input the Composition accepts at runtime — compiles into the OGraf manifest's `schema`. */
 export interface FieldDefinition {
   id: string;
@@ -693,6 +705,8 @@ export interface FieldDefinition {
   properties: FieldDefinition[];
   /** One recursive item schema when type is array. */
   items: FieldDefinition | null;
+  /** Optional Volk live-data binding. Absent = plain OGraf field. Emitted as `v_volk`. */
+  volkBinding?: VolkFieldBinding | null;
 }
 
 /** ID-optional recursive input used by editor/MCP authoring operations. */
@@ -709,6 +723,7 @@ export interface FieldSchemaInput {
   fileExtensions?: string[];
   properties?: FieldSchemaInput[];
   items?: FieldSchemaInput | null;
+  volkBinding?: VolkFieldBinding | null;
 }
 
 export interface RuntimeCollectionDefinition {

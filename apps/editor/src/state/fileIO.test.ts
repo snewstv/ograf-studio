@@ -88,3 +88,27 @@ describe('remote OGraf Studio project loading', () => {
     ).rejects.toThrow('32 MiB');
   });
 });
+
+describe('openProjectFromUrl extra edge cases (fork addition)', () => {
+  it('rejects ftp and other non-web schemes before fetching', async () => {
+    let fetched = false;
+    await expect(
+      openProjectFromUrl('ftp://cdn.example.com/news.ogs', async () => {
+        fetched = true;
+        return new Response('{}');
+      }),
+    ).rejects.toThrow('HTTP or HTTPS');
+    expect(fetched).toBe(false);
+  });
+
+  it('rejects invalid JSON and non-project payloads through the URL path', async () => {
+    const invalid = (body: string) => async () =>
+      new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+    await expect(
+      openProjectFromUrl('https://cdn.example.com/a.ogs', invalid('not json')),
+    ).rejects.toThrow('valid JSON');
+    await expect(
+      openProjectFromUrl('https://cdn.example.com/b.ogs', invalid(JSON.stringify({ foo: 1 }))),
+    ).rejects.toThrow('not a valid OGraf Studio project');
+  });
+});

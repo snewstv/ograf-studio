@@ -25,6 +25,31 @@ import { selectableLayerIds } from '../state/selectAllLayers';
 import './Menubar.css';
 import { useDetachedWindows } from '../layout/detachedWindowContext';
 import { duplicateSelectedLayers } from '../state/editorShortcuts';
+import {
+  checkCookieSession,
+  clearSouvToken,
+  getSouvAccountUrl,
+  isCloudSaveEnabled,
+  isSouvLoggedIn,
+  loginWithSouvPopup,
+  onSouvAuthChange,
+} from '../cloud/souvAuth';
+import {
+  getGatewayBridgeStatus,
+  onGatewayBridgeChange,
+  type GatewayBridgeStatus,
+} from '../cloud/gatewaySocket';
+
+const GATEWAY_ENABLED =
+  (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_MCP_GATEWAY ===
+  '1';
+
+const GATEWAY_STATUS_LABEL: Record<GatewayBridgeStatus, string> = {
+  off: 'Bridge: off',
+  connecting: 'Bridge: connecting…',
+  connected: 'Bridge: connected',
+  replaced: 'Bridge: replaced by a newer tab',
+};
 
 const historyTime = (timestamp: number) =>
   new Date(timestamp).toLocaleTimeString([], {
@@ -59,24 +84,33 @@ export function Menubar({
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
   const [windowMenuOpen, setWindowMenuOpen] = useState(false);
+  const [souvMenuOpen, setSouvMenuOpen] = useState(false);
+  const [souvLoggedIn, setSouvLoggedIn] = useState(() => isSouvLoggedIn());
+  const [bridgeStatus, setBridgeStatus] = useState<GatewayBridgeStatus>(() =>
+    getGatewayBridgeStatus(),
+  );
   const editMenuRef = useRef<HTMLDivElement>(null);
   const windowMenuRef = useRef<HTMLDivElement>(null);
+  const souvMenuRef = useRef<HTMLDivElement>(null);
   const history = useSyncExternalStore(subscribeHistory, getHistorySnapshot, getHistorySnapshot);
   const agentConnected = useAgentBridgeStatus((state) => state.connected);
   const agentActivity = useAgentBridgeStatus((state) => state.activity);
 
   useEffect(() => {
-    if (!editMenuOpen && !windowMenuOpen) return;
+    if (!editMenuOpen && !windowMenuOpen && !souvMenuOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target as Node;
       if (editMenuRef.current?.contains(target) || windowMenuRef.current?.contains(target)) return;
+      if (souvMenuRef.current?.contains(target)) return;
       setEditMenuOpen(false);
       setWindowMenuOpen(false);
+      setSouvMenuOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       setEditMenuOpen(false);
       setWindowMenuOpen(false);
+      setSouvMenuOpen(false);
     };
     document.addEventListener('pointerdown', closeOnOutsidePointer);
     document.addEventListener('keydown', closeOnEscape);
@@ -84,7 +118,14 @@ export function Menubar({
       document.removeEventListener('pointerdown', closeOnOutsidePointer);
       document.removeEventListener('keydown', closeOnEscape);
     };
-  }, [editMenuOpen, windowMenuOpen]);
+  }, [editMenuOpen, windowMenuOpen, souvMenuOpen]);
+
+  useEffect(() => onSouvAuthChange(() => setSouvLoggedIn(isSouvLoggedIn())), []);
+  useEffect(() => onGatewayBridgeChange(setBridgeStatus), []);
+  useEffect(() => {
+    // A cookie session from another tab isn't visible until probed once.
+    if (!isSouvLoggedIn()) void checkCookieSession();
+  }, []);
 
   const applyUndo = (steps = 1) => {
     const label = history.past.at(-1)?.label;
@@ -201,6 +242,23 @@ export function Menubar({
 
   const handleSave = () => setSaveDialogOpen(true);
 
+  const handleSouvLogin = async () => {
+    setSouvMenuOpen(false);
+    setStatus('Opening Souv login…');
+    try {
+      await loginWithSouvPopup();
+      setStatus(isSouvLoggedIn() ? 'Logged in to Souv' : 'Souv session active (browser login)');
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : 'Souv login failed');
+    }
+  };
+
+  const handleSouvLogout = () => {
+    clearSouvToken();
+    setSouvMenuOpen(false);
+    setStatus('Signed out in this tab. To fully sign out, log out in your Souv account.');
+  };
+
   return (
     <header className="menubar" style={style}>
       {saveDialogOpen ? (
@@ -218,7 +276,9 @@ export function Menubar({
             setStatus(
               mode === 'saved'
                 ? 'Template + PNG saved (certified)'
-                : 'Template + PNG ZIP downloaded',
+                : mode === 'cloud'
+                  ? 'Template saved to the Souv cloud'
+                  : 'Template + PNG ZIP downloaded',
             );
           }}
         />
@@ -375,6 +435,78 @@ export function Menubar({
             </div>
           ) : null}
         </div>
+        {isCloudSaveEnabled() ? (
+          <div className="menubar-window-control" ref={souvMenuRef}>
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={souvMenuOpen}
+              title={souvLoggedIn ? 'Signed in to Souv' : 'Sign in to Souv to save to the cloud'}
+              onClick={() => {
+                setSouvMenuOpen((open) => !open);
+                setEditMenuOpen(false);
+                setWindowMenuOpen(false);
+              }}
+            >
+              Souv{' '}
+              <span aria-hidden="true" style={{ color: souvLoggedIn ? '#3fb950' : '#8b949e' }}>
+                ●
+              </span>
+            </button>
+            {souvMenuOpen ? (
+              <div className="menubar-window-menu" role="menu" aria-label="Souv cloud">
+                {GATEWAY_ENABLED ? (
+                  <div
+                    className="menubar-history-heading"
+                    role="presentation"
+                    title="External MCP clients drive this tab's tools only while connected"
+                  >
+                    {GATEWAY_STATUS_LABEL[bridgeStatus]}
+                  </div>
+                ) : null}
+                {souvLoggedIn ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={handleSouvLogout}
+                    title="Clears this tab's token. The browser login in your Souv account stays active."
+                  >
+                    <span aria-hidden="true">⎋</span>
+                    Log out (this tab)
+                  </button>
+                ) : (
+                  <button type="button" role="menuitem" onClick={() => void handleSouvLogin()}>
+                    <span aria-hidden="true">⎋</span>
+                    Log in with Souv
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSouvMenuOpen(false);
+                    window.open(getSouvAccountUrl(), '_blank', 'noopener');
+                  }}
+                >
+                  <span aria-hidden="true">↗</span>
+                  Open Souv account
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  title="Corresponding Source of this modified editor (AGPL-3.0-only)"
+                  onClick={() => {
+                    setSouvMenuOpen(false);
+                    window.open('https://github.com/snewstv/ograf-studio', '_blank', 'noopener');
+                  }}
+                >
+                  <span aria-hidden="true">§</span>
+                  Source (AGPL)
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </nav>
       <span
         className={`menubar-agent-status${agentConnected ? ' is-connected' : ''}`}

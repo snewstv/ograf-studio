@@ -107,3 +107,14 @@
 .template-save-actions button {
   padding: 6px 10px;
 }
+
+.template-save-destination {
+  display: flex;
+  gap: 12px;
+  margin: 4px 0;
+}
+.template-save-destination label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}

@@ -9,7 +9,11 @@ import {
 } from '@ograf-editor/scene-model';
 import { saveProjectToFile } from '../state/fileIO';
 import { useEditorWindow } from '../layout/EditorWindow';
+import { isCloudSaveEnabled, requireSouvLogin } from '../cloud/souvAuth';
+import { exportProjectToCloud, saveProjectToCloud } from '../cloud/souvProjects';
 import './TemplateSaveDialog.css';
+
+export type TemplateSaveMode = 'saved' | 'downloaded' | 'cloud';
 
 export function TemplateSaveDialog({
   project,
@@ -19,7 +23,7 @@ export function TemplateSaveDialog({
 }: {
   project: Project;
   onClose: () => void;
-  onSaved: (mode: 'saved' | 'downloaded', frame: number | null) => void;
+  onSaved: (mode: TemplateSaveMode, frame: number | null) => void;
   exportOptions?: {
     fileName: string;
     save: (snapshot: Project) => Promise<'saved' | 'cancelled' | 'downloaded'>;
@@ -32,6 +36,8 @@ export function TemplateSaveDialog({
   const [error, setError] = useState('');
   const [rendering, setRendering] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [destination, setDestination] = useState<'local' | 'souv'>('local');
+  const cloudEnabled = isCloudSaveEnabled();
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const snapshot = useMemo(() => ({ ...project, thumbnailFrame: frame }), [project, frame]);
@@ -72,6 +78,19 @@ export function TemplateSaveDialog({
     setSaving(true);
     setError('');
     try {
+      // Souv cloud destination (login-gated). The dialog-local revision is not
+      // tracked here, so the save goes through without `expectedRev`
+      // (last-write-wins); use the Souv panel list for conflict-checked saves.
+      if (cloudEnabled && destination === 'souv') {
+        await requireSouvLogin();
+        if (exportOptions) {
+          await exportProjectToCloud(snapshot);
+        } else {
+          await saveProjectToCloud(snapshot);
+        }
+        onSaved('cloud', frame);
+        return;
+      }
       const result = exportOptions
         ? await exportOptions.save(snapshot)
         : await saveProjectToFile(snapshot, { baseName, downloadOnly });
@@ -212,6 +231,34 @@ export function TemplateSaveDialog({
               ? 'Choose a folder to save both files together.'
               : 'Download a ZIP containing the editable template and its PNG thumbnail.'}
         </p>
+        {cloudEnabled ? (
+          <div
+            className="template-save-destination"
+            role="radiogroup"
+            aria-label="Save destination"
+          >
+            <label>
+              <input
+                type="radio"
+                name="template-save-destination"
+                checked={destination === 'local'}
+                disabled={saving}
+                onChange={() => setDestination('local')}
+              />
+              <span>This computer</span>
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="template-save-destination"
+                checked={destination === 'souv'}
+                disabled={saving}
+                onChange={() => setDestination('souv')}
+              />
+              <span>Souv cloud (login required)</span>
+            </label>
+          </div>
+        ) : null}
         {error ? (
           <div role="alert" className="template-save-error">
             {error}
@@ -221,7 +268,7 @@ export function TemplateSaveDialog({
           <button type="button" disabled={saving} onClick={onClose}>
             Cancel
           </button>
-          {!exportOptions && window.showDirectoryPicker ? (
+          {!exportOptions && window.showDirectoryPicker && destination === 'local' ? (
             <button
               type="button"
               disabled={saving || rendering || !preview || !name.trim()}
@@ -235,15 +282,21 @@ export function TemplateSaveDialog({
             disabled={saving || rendering || !preview || !name.trim()}
             onClick={() => void save()}
           >
-            {exportOptions
+            {cloudEnabled && destination === 'souv'
               ? saving
-                ? 'Testing & exporting…'
-                : 'Export .ograf.zip'
-              : saving
-                ? 'Saving…'
-                : window.showDirectoryPicker
-                  ? 'Save files…'
-                  : 'Download files'}
+                ? 'Saving to Souv…'
+                : exportOptions
+                  ? 'Export to Souv cloud'
+                  : 'Save to Souv cloud'
+              : exportOptions
+                ? saving
+                  ? 'Testing & exporting…'
+                  : 'Export .ograf.zip'
+                : saving
+                  ? 'Saving…'
+                  : window.showDirectoryPicker
+                    ? 'Save files…'
+                    : 'Download files'}
           </button>
         </div>
       </section>

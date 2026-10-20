@@ -396,6 +396,7 @@ interface ProjectActions {
         | 'fileExtensions'
         | 'properties'
         | 'items'
+        | 'volkBinding'
       >
     >,
   ) => void;

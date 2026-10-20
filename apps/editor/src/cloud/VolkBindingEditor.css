@@ -1,0 +1,18 @@
+.data-field-volk {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.data-field-volk label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.data-field-volk-live {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px;
+}

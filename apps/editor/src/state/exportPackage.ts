@@ -20,12 +20,34 @@ export type ExportZipResult = ExportArtifacts & {
   saveResult: 'saved' | 'cancelled' | 'downloaded';
 };
 
-/** Packages only an OGraf-certified project; no save/download starts before all checks pass. */
-export async function exportProjectAsZip(
+export interface CertifiedZipPackage {
+  blob: Blob;
+  fileName: string;
+  artifacts: ExportArtifacts;
+  compatibility: OGrafCompatibilityResult;
+}
+
+/** Reads a Blob fully as a base64 (no data-URI prefix) string. */
+export async function blobToBase64(blob: Blob): Promise<string> {
+  const buffer = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < buffer.length; i += CHUNK) {
+    binary += String.fromCharCode(...buffer.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Packages an OGraf-certified project as an in-memory `.ograf.zip` Blob WITHOUT
+ * triggering any local save/download dialog. Shared by local `Export .ograf.zip`
+ * and cloud publish so both flows produce byte-identical packages.
+ */
+export async function buildCertifiedZip(
   project: Project,
   composition: Composition,
   profile?: ExportProfile,
-): Promise<ExportZipResult> {
+): Promise<CertifiedZipPackage> {
   const snapshot = structuredClone(project);
   const snapshotComposition = structuredClone(composition);
   let artifacts = buildExportArtifacts(snapshot, snapshotComposition, profile);
@@ -53,10 +75,21 @@ export async function exportProjectAsZip(
     zip.file(resource.path, resource.data, { base64: resource.base64 });
   }
   const blob = await zip.generateAsync({ type: 'blob' });
-  const saveResult = await saveBlobToFile(
-    blob,
-    `${snapshot.name || 'untitled'}${profile?.fileNameSuffix ?? ''}.ograf.zip`,
-    ZIP_FILE_TYPES,
+  const fileName = `${snapshot.name || 'untitled'}${profile?.fileNameSuffix ?? ''}.ograf.zip`;
+  return { blob, fileName, artifacts, compatibility };
+}
+
+/** Packages only an OGraf-certified project; no save/download starts before all checks pass. */
+export async function exportProjectAsZip(
+  project: Project,
+  composition: Composition,
+  profile?: ExportProfile,
+): Promise<ExportZipResult> {
+  const { blob, fileName, artifacts, compatibility } = await buildCertifiedZip(
+    project,
+    composition,
+    profile,
   );
+  const saveResult = await saveBlobToFile(blob, fileName, ZIP_FILE_TYPES);
   return { ...artifacts, compatibility, saveResult };
 }

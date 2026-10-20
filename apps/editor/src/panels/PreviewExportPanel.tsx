@@ -957,13 +957,14 @@ export function PreviewExportPanel() {
             fileName: `${exportDialogProject.name || 'untitled'}${exportProfile.fileNameSuffix ?? ''}.ograf.zip`,
             save: handleExport,
           }}
-          onSaved={(_mode, frame) => {
+          onSaved={(mode, frame) => {
             const current = useProjectStore.getState();
             if (
               current.project.id === exportDialogProject.id &&
               (current.project.thumbnailFrame ?? null) !== frame
             )
               current.setProjectMeta({ thumbnailFrame: frame });
+            if (mode === 'cloud') setExportStatus('Published to the Souv cloud.');
             setExportDialogProject(null);
           }}
         />

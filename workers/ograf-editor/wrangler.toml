@@ -1,0 +1,41 @@
+# OGraf Studio cloud host — local-first, deploy-ready (no deploy in this task).
+name = "ograf-studio-cloud"
+compatibility_date = "2026-08-28"
+compatibility_flags = ["assets_navigation_has_no_effect"]
+main = "src/worker.ts"
+
+placement = { mode = "smart" }
+
+# `npm run build` copies `apps/editor/dist` here. Never commit `dist/`.
+assets = { directory = "./dist", binding = "ASSETS", html_handling = "drop-trailing-slash", not_found_handling = "single-page-application" }
+
+observability = { enabled = true }
+
+# Per-token MCP gateway (OG-028G). Local dev uses miniflare storage; the
+# migration tag makes the class deploy-ready without further changes.
+durable_objects.bindings = [{ name = "GATEWAY", class_name = "GatewayDO" }]
+
+[exports.GatewayDO]
+type = "durable-object"
+storage = "sqlite"
+
+[vars]
+SOUV_API = "https://api.souv.live:8787"
+
+[env.develop]
+name = "ograf-studio-cloud-dev"
+workers_dev = true
+routes = [
+  { pattern = "ograf.souv.dev", zone_name = "souv.dev", custom_domain = true },
+]
+[env.develop.vars]
+SOUV_API = "https://api.souv.dev"
+
+[env.production]
+name = "ograf-studio-cloud"
+workers_dev = false
+routes = [
+  { pattern = "ograf.souv.tv", zone_name = "souv.tv", custom_domain = true },
+]
+[env.production.vars]
+SOUV_API = "https://api.souv.tv"

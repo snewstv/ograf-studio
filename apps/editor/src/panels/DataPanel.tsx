@@ -17,6 +17,7 @@ import { useActiveComposition, useProjectStore } from '../state/projectStore';
 import { useTestDataStore, type TestValue } from '../state/testDataStore';
 import { Panel } from './Panel';
 import { PaintEditor } from './PaintEditor';
+import { VolkBindingEditor } from '../cloud/VolkBindingEditor';
 import './DataPanel.css';
 
 const FIELD_TYPE_OPTIONS: { value: FieldType; label: string }[] = [
@@ -369,6 +370,7 @@ function FieldDetails({
         | 'fileExtensions'
         | 'properties'
         | 'items'
+        | 'volkBinding'
       >
     >,
   ) => void;
@@ -386,6 +388,7 @@ function FieldDetails({
           onChange={(event) => update(field.id, { description: event.target.value })}
         />
       </label>
+      <VolkBindingEditor field={field} update={update} />
       {(field.type === 'select' || field.type === 'select-multiple') && (
         <label className="data-field-options">
           <span>Options · one value|label per line</span>
@@ -680,6 +683,7 @@ function FieldSchemaEditor({
         | 'fileExtensions'
         | 'properties'
         | 'items'
+        | 'volkBinding'
       >
     >,
   ) => void;

@@ -1,0 +1,16 @@
+{
+  "name": "ograf-studio-cloud",
+  "version": "0.22.0",
+  "devDependencies": {
+    "wrangler": "4.151.1"
+  },
+  "description": "Cloudflare Worker host for the OGraf Studio fork (static editor + deploy-ready). No deploy runs from this task.",
+  "private": true,
+  "scripts": {
+    "build": "bun ./scripts/copy-dist.mjs",
+    "dev": "wrangler dev",
+    "deploy:develop": "wrangler deploy --env develop",
+    "deploy:production": "wrangler deploy --env production"
+  },
+  "type": "module"
+}

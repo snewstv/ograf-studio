@@ -4,6 +4,7 @@ import {
   type CustomActionDefinition,
   type FieldDefinition,
   type FieldType,
+  type VolkFieldBinding,
 } from '@ograf-editor/scene-model';
 
 export interface JSONSchemaProperty {
@@ -28,6 +29,8 @@ export interface JSONSchemaProperty {
   multipleOf?: number;
   /** Authoring ownership preserved when recovering an editable shader from its package. */
   v_ografShaderParameter?: FieldDefinition['generatedShaderParameter'];
+  /** Vendor live-data binding for Volk/Souv autocomplete. Ignored by third-party renderers. */
+  v_volk?: VolkFieldBinding;
 }
 
 /** Shaped to slot directly into an OGraf manifest's `schema` field. */
@@ -123,6 +126,7 @@ function propertyFor(field: FieldDefinition): JSONSchemaProperty {
   }
   if (field.generatedShaderParameter)
     property.v_ografShaderParameter = structuredClone(field.generatedShaderParameter);
+  if (field.volkBinding) property.v_volk = structuredClone(field.volkBinding);
   if (field.type === 'file-path' || field.type === 'image-url') {
     property.gddOptions = field.fileExtensions.length ? { extensions: field.fileExtensions } : {};
   }

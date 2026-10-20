@@ -6,7 +6,7 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "start": "tsx src/mcpMain.ts",
+    "start": "bun src/mcpMain.ts",
     "start:standalone": "bun run src/standalone.ts",
     "typecheck": "tsc --noEmit"
   },
@@ -27,7 +27,6 @@
     "@types/node": "^24.13.3",
     "@types/express": "^5.0.6",
     "@types/ws": "^8.18.1",
-    "tsx": "^4.21.0",
     "typescript": "~6.0.2"
   }
 }
