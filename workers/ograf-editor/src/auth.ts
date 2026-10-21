@@ -4,10 +4,6 @@
  * hash, so no owner lookup (and no Souv code change) is required.
  */
 
-const cache = new Map<string, { ok: boolean; exp: number }>();
-const POSITIVE_TTL_MS = 5 * 60 * 1000;
-const NEGATIVE_TTL_MS = 60 * 1000;
-
 export async function sha256Hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -20,14 +16,17 @@ function souvApi(env: Record<string, unknown>): string {
 }
 
 /** Returns the token hash when the token is accepted by Souv, else null. */
+/**
+ * Raw check (no cache): the caller (`GatewayDO.#valid`) caches per login
+ * stub, so N worker isolates share one introspection per TTL instead of
+ * one each.
+ */
 export async function verifySouvToken(
   env: Record<string, unknown>,
   token: string,
 ): Promise<string | null> {
   if (!token.trim()) return null;
   const hash = await sha256Hex(token);
-  const hit = cache.get(hash);
-  if (hit && hit.exp > Date.now()) return hit.ok ? hash : null;
   let ok = false;
   try {
     // Any authenticated query proves the token; keep it tiny. GraphQL errors
@@ -56,7 +55,6 @@ export async function verifySouvToken(
     );
     ok = false;
   }
-  cache.set(hash, { ok, exp: Date.now() + (ok ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS) });
   return ok ? hash : null;
 }
 

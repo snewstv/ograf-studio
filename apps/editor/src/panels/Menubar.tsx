@@ -1,4 +1,5 @@
 import { OgrafLogo } from '../components/OgrafLogo';
+import type { Project } from '@ograf-editor/scene-model';
 import {
   useEffect,
   useRef,
@@ -9,8 +10,11 @@ import {
 } from 'react';
 import { useProjectStore } from '../state/projectStore';
 import { useSelectionStore } from '../state/selectionStore';
-import { openProjectFromFile, openProjectFromUrl } from '../state/fileIO';
+import { openProjectFromUrl } from '../state/fileIO';
 import { TemplateSaveDialog } from '../components/TemplateSaveDialog';
+import { OpenProjectDialog } from '../components/OpenProjectDialog';
+import { ProjectManagerDialog } from '../components/ProjectManagerDialog';
+import { AccountSelectDialog } from '../components/AccountSelectDialog';
 import {
   getHistorySnapshot,
   redo,
@@ -28,10 +32,13 @@ import { duplicateSelectedLayers } from '../state/editorShortcuts';
 import {
   checkCookieSession,
   clearSouvToken,
+  getSouvAccTitle,
   getSouvAccountUrl,
   isCloudSaveEnabled,
   isSouvLoggedIn,
   loginWithSouvPopup,
+  onSouvAccountChange,
+  onSouvAccTitleChange,
   onSouvAuthChange,
 } from '../cloud/souvAuth';
 import {
@@ -78,6 +85,8 @@ export function Menubar({
   const selectedLayerIds = useSelectionStore((s) => s.selectedLayerIds);
   const [status, setStatus] = useState('');
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [openDialogOpen, setOpenDialogOpen] = useState(false);
+  const [managerOpen, setManagerOpen] = useState(false);
   const [importReport, setImportReport] = useState<OgrafImportResult | null>(null);
   const [remoteDialogOpen, setRemoteDialogOpen] = useState(false);
   const [remoteUrl, setRemoteUrl] = useState('');
@@ -122,6 +131,16 @@ export function Menubar({
 
   useEffect(() => onSouvAuthChange(() => setSouvLoggedIn(isSouvLoggedIn())), []);
   useEffect(() => onGatewayBridgeChange(setBridgeStatus), []);
+  const [souvAccTitle, setSouvAccTitle] = useState<string | null>(() => getSouvAccTitle());
+  const [accountDialogOpen, setAccountDialogOpen] = useState(false);
+  useEffect(
+    () =>
+      onSouvAccountChange(() => {
+        setSouvAccTitle(getSouvAccTitle());
+      }),
+    [],
+  );
+  useEffect(() => onSouvAccTitleChange((title) => setSouvAccTitle(title)), []);
   useEffect(() => {
     // A cookie session from another tab isn't visible until probed once.
     if (!isSouvLoggedIn()) void checkCookieSession();
@@ -169,18 +188,17 @@ export function Menubar({
     setStatus('New project created');
   };
 
-  const handleOpen = async () => {
-    try {
-      const opened = await openProjectFromFile();
-      if (opened) {
-        loadProject(opened);
-        resetHistory();
-        select(null);
-        setStatus(`Opened "${opened.name}"`);
-      }
-    } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Failed to open project');
+  const handleOpened = (opened: Project, label: string) => {
+    if (!confirm(`Open "${opened.name}"? Unsaved changes in the current project will be lost.`)) {
+      setStatus('Open cancelled');
+      return;
     }
+    loadProject(opened);
+    resetHistory();
+    select(null);
+    setOpenDialogOpen(false);
+    setManagerOpen(false);
+    setStatus(label);
   };
 
   const handleImportOgraf = async () => {
@@ -256,7 +274,9 @@ export function Menubar({
   const handleSouvLogout = () => {
     clearSouvToken();
     setSouvMenuOpen(false);
-    setStatus('Signed out in this tab. To fully sign out, log out in your Souv account.');
+    setStatus(
+      'Signed out in this tab (selected Souv account reset in all tabs). To fully sign out, log out in your Souv account.',
+    );
   };
 
   return (
@@ -283,6 +303,18 @@ export function Menubar({
           }}
         />
       ) : null}
+      {openDialogOpen ? (
+        <OpenProjectDialog onClose={() => setOpenDialogOpen(false)} onOpened={handleOpened} />
+      ) : null}
+      {managerOpen ? (
+        <ProjectManagerDialog onClose={() => setManagerOpen(false)} onOpened={handleOpened} />
+      ) : null}
+      {accountDialogOpen ? (
+        <AccountSelectDialog
+          onClose={() => setAccountDialogOpen(false)}
+          onSelected={(account) => setStatus(`Souv account: ${account.title}`)}
+        />
+      ) : null}
       <span className="menubar-brand" aria-label="OGraf Studio">
         <OgrafLogo />
         Studio
@@ -292,7 +324,7 @@ export function Menubar({
         <button type="button" onClick={handleNew}>
           New
         </button>
-        <button type="button" onClick={handleOpen}>
+        <button type="button" onClick={() => setOpenDialogOpen(true)}>
           Open
         </button>
         <button type="button" onClick={() => setRemoteDialogOpen(true)}>
@@ -465,11 +497,48 @@ export function Menubar({
                   </div>
                 ) : null}
                 {souvLoggedIn ? (
+                  <>
+                    <div
+                      className="menubar-history-heading"
+                      role="presentation"
+                      title="Saves, exports and the project list target this account"
+                    >
+                      Account: {souvAccTitle ?? 'personal'}
+                    </div>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setSouvMenuOpen(false);
+                        setAccountDialogOpen(true);
+                      }}
+                      title="Pick which Souv account saves, exports and project lists target"
+                    >
+                      <span aria-hidden="true">⇄</span>
+                      Select account…
+                    </button>
+                  </>
+                ) : null}
+                {souvLoggedIn ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setSouvMenuOpen(false);
+                      setManagerOpen(true);
+                    }}
+                    title="Open, download, rename or delete your Souv cloud projects"
+                  >
+                    <span aria-hidden="true">☰</span>
+                    Manage projects…
+                  </button>
+                ) : null}
+                {souvLoggedIn ? (
                   <button
                     type="button"
                     role="menuitem"
                     onClick={handleSouvLogout}
-                    title="Clears this tab's token. The browser login in your Souv account stays active."
+                    title="Clears this tab's token and resets the selected Souv account in all tabs (shared-browser selection). The browser login in your Souv account stays active."
                   >
                     <span aria-hidden="true">⎋</span>
                     Log out (this tab)

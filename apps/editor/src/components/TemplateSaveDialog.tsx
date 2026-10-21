@@ -8,8 +8,17 @@ import {
   type Project,
 } from '@ograf-editor/scene-model';
 import { saveProjectToFile } from '../state/fileIO';
+import { useProjectStore } from '../state/projectStore';
 import { useEditorWindow } from '../layout/EditorWindow';
-import { isCloudSaveEnabled, requireSouvLogin } from '../cloud/souvAuth';
+import {
+  getSouvAccTitle,
+  isCloudSaveEnabled,
+  isSouvLoggedIn,
+  onSouvAccountChange,
+  onSouvAccTitleChange,
+  onSouvAuthChange,
+  requireSouvLogin,
+} from '../cloud/souvAuth';
 import { exportProjectToCloud, saveProjectToCloud } from '../cloud/souvProjects';
 import './TemplateSaveDialog.css';
 
@@ -38,6 +47,11 @@ export function TemplateSaveDialog({
   const [saving, setSaving] = useState(false);
   const [destination, setDestination] = useState<'local' | 'souv'>('local');
   const cloudEnabled = isCloudSaveEnabled();
+  const [cloudAccTitle, setCloudAccTitle] = useState<string | null>(() => getSouvAccTitle());
+  useEffect(() => onSouvAccountChange(() => setCloudAccTitle(getSouvAccTitle())), []);
+  useEffect(() => onSouvAccTitleChange((title) => setCloudAccTitle(title)), []);
+  const [cloudLoggedIn, setCloudLoggedIn] = useState(() => isSouvLoggedIn());
+  useEffect(() => onSouvAuthChange(() => setCloudLoggedIn(isSouvLoggedIn())), []);
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const snapshot = useMemo(() => ({ ...project, thumbnailFrame: frame }), [project, frame]);
@@ -84,7 +98,16 @@ export function TemplateSaveDialog({
       if (cloudEnabled && destination === 'souv') {
         await requireSouvLogin();
         if (exportOptions) {
-          await exportProjectToCloud(snapshot);
+          const published = await exportProjectToCloud(snapshot);
+          // A publish may auto-bump the manifest version (immutable versions
+          // on the backend): persist it so the saved source and the next
+          // export start from the published version, not the stale one.
+          if (published.version !== snapshot.version) {
+            const store = useProjectStore.getState();
+            if (store.project.id === snapshot.id) {
+              store.setProjectMeta({ version: published.version });
+            }
+          }
         } else {
           await saveProjectToCloud(snapshot);
         }
@@ -255,7 +278,14 @@ export function TemplateSaveDialog({
                 disabled={saving}
                 onChange={() => setDestination('souv')}
               />
-              <span>Souv cloud (login required)</span>
+              <span>
+                Souv cloud
+                {cloudAccTitle
+                  ? ` — ${cloudAccTitle}`
+                  : cloudLoggedIn
+                    ? ' (personal)'
+                    : ' (login required)'}
+              </span>
             </label>
           </div>
         ) : null}

@@ -354,3 +354,57 @@
   border-color: var(--accent);
   outline: none;
 }
+
+.open-cloud-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+.open-cloud-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.open-cloud-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.open-cloud-search {
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.open-cloud-search input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.open-cloud-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.open-cloud-account select {
+  flex: 1;
+  min-width: 0;
+}
+.open-cloud-notice {
+  margin: 0 0 8px;
+  color: #3fb950;
+}
+.open-cloud-edit {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.open-cloud-edit input {
+  min-width: 140px;
+}
+.open-cloud-delete {
+  color: #f85149;
+}

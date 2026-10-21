@@ -1,5 +1,5 @@
 # OGraf Studio cloud host — local-first, deploy-ready (no deploy in this task).
-name = "ograf-studio-cloud"
+name = "ograf-studio"
 compatibility_date = "2026-08-28"
 compatibility_flags = ["assets_navigation_has_no_effect"]
 main = "src/worker.ts"
@@ -23,7 +23,7 @@ storage = "sqlite"
 SOUV_API = "https://api.souv.live:8787"
 
 [env.develop]
-name = "ograf-studio-cloud-dev"
+name = "ograf-studio-dev"
 workers_dev = true
 routes = [
   { pattern = "ograf.souv.dev", zone_name = "souv.dev", custom_domain = true },
@@ -32,7 +32,7 @@ routes = [
 SOUV_API = "https://api.souv.dev"
 
 [env.production]
-name = "ograf-studio-cloud"
+name = "ograf-studio"
 workers_dev = false
 routes = [
   { pattern = "ograf.souv.tv", zone_name = "souv.tv", custom_domain = true },

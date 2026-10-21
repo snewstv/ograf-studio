@@ -83,6 +83,10 @@ export function clearSouvToken(): void {
   // active. Fully signing out requires logging out in the Souv account itself.
   loggedOut = true;
   setSouvToken(null);
+  // Drop the multi-account selection too: it lives in localStorage, so
+  // without this the next login on a shared browser would save into the
+  // previous user's selected account (or fail against it).
+  setSouvAccID(null);
   if (cookieSession) {
     cookieSession = false;
     notify();
@@ -134,11 +138,25 @@ export async function checkCookieSession(): Promise<boolean> {
   if (!base || loggedOut) return false;
   let ok = false;
   try {
-    const response = await fetch(`${base}/api/ograf/projects`, {
-      headers: { Accept: 'application/json' },
+    // Any authenticated query proves the cookie session; keep it tiny.
+    // NOTE: ografProjects is a Connection — a flat `{ ografProjects { id } }`
+    // selection is rejected by the backend, so this probes the edges shape.
+    const response = await fetch(`${base}/api/graphql`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
+      body: JSON.stringify({
+        query: 'query OgrafList { ografProjects(first: 1) { edges { node { id } } } }',
+      }),
     });
-    ok = response.ok;
+    if (!response.ok) {
+      ok = false;
+    } else {
+      const envelope = (await response.json().catch(() => null)) as {
+        errors?: Array<{ message?: string }>;
+      } | null;
+      ok = !envelope?.errors?.length;
+    }
   } catch {
     ok = false;
   }
@@ -241,17 +259,131 @@ export function consumeTokenFromLocation(): boolean {
   }
 }
 
-/** Fetch wrapper for Souv API calls: cookies always, Bearer when a token exists. */
-export async function souvFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const base = getSouvApiBase();
-  if (!base) {
-    throw new Error(
-      'Cloud save is not configured. Set VITE_SOUV_API (and VITE_CLOUD_SAVE=1) and restart the editor.',
-    );
+/** GraphQL envelope error messages, if any. */
+export function gqlErrorMessages(envelope: unknown): string[] {
+  const errors = (envelope as { errors?: Array<{ message?: string }> } | null)?.errors;
+  if (!Array.isArray(errors)) return [];
+  return errors.map((entry) => entry?.message).filter((text): text is string => !!text);
+}
+
+/**
+ * Souv account selection (multi-account).
+ *
+ * One login can access several accounts (personal + invited). Every ograf
+ * operation takes an optional `accID` (the backend defaults to the login
+ * itself). The editor keeps the selection per browser in `localStorage`
+ * (an account id is a preference, not a secret) and threads it through all
+ * cloud calls, so list/open/save/export/delete/rename/copy all hit the same
+ * account. `null` means the personal (login) account.
+ */
+const ACCOUNT_KEY = 'souv.account';
+
+let selectedAccount: { id: string; title: string } | null | undefined;
+const accountListeners = new Set<(id: string | null) => void>();
+
+function readStoredAccount(): { id: string; title: string } | null {
+  if (selectedAccount !== undefined) return selectedAccount;
+  try {
+    const raw = localStorage.getItem(ACCOUNT_KEY);
+    const parsed = raw ? (JSON.parse(raw) as { id?: unknown; title?: unknown }) : null;
+    selectedAccount =
+      parsed && typeof parsed.id === 'string' && parsed.id
+        ? {
+            id: parsed.id,
+            title: typeof parsed.title === 'string' && parsed.title ? parsed.title : parsed.id,
+          }
+        : null;
+  } catch {
+    selectedAccount = null;
   }
-  const token = getSouvToken();
-  const headers = new Headers(init.headers);
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  if (!headers.has('Accept')) headers.set('Accept', 'application/json');
-  return fetch(`${base}${path}`, { ...init, headers, credentials: 'include' });
+  return selectedAccount;
+}
+
+export function onSouvAccountChange(listener: (id: string | null) => void): () => void {
+  accountListeners.add(listener);
+  return () => {
+    accountListeners.delete(listener);
+  };
+}
+
+/** Selected account id, or `null` for the personal (login) account. */
+export function getSouvAccID(): string | null {
+  return readStoredAccount()?.id ?? null;
+}
+
+/** Display title of the selected account, or `null` when on personal/unknown. */
+export function getSouvAccTitle(): string | null {
+  return readStoredAccount()?.title ?? null;
+}
+
+export function setSouvAccID(id: string | null, title?: string | null): void {
+  selectedAccount = id ? { id, title: title?.trim() ? title.trim() : id } : null;
+  try {
+    if (selectedAccount) localStorage.setItem(ACCOUNT_KEY, JSON.stringify(selectedAccount));
+    else localStorage.removeItem(ACCOUNT_KEY);
+  } catch {
+    // Private mode — the selection lasts for the tab only.
+  }
+  for (const listener of accountListeners) listener(id);
+}
+
+/**
+ * Updates ONLY the stored display title of the selected account, without
+ * notifying account-change listeners: the account id did not change, so
+ * consumers must not treat this as a switch (which would reload lists).
+ * Title-only listeners DO fire, so open dialogs can refresh their labels.
+ */
+const titleListeners = new Set<(title: string | null) => void>();
+
+export function onSouvAccTitleChange(listener: (title: string | null) => void): () => void {
+  titleListeners.add(listener);
+  return () => {
+    titleListeners.delete(listener);
+  };
+}
+
+export function syncSouvAccTitle(title: string): void {
+  const current = readStoredAccount();
+  const trimmed = title.trim();
+  if (!current || !trimmed || current.title === trimmed) return;
+  selectedAccount = { id: current.id, title: trimmed };
+  try {
+    localStorage.setItem(ACCOUNT_KEY, JSON.stringify(selectedAccount));
+  } catch {
+    // Private mode — memory copy above still applies for the tab.
+  }
+  for (const listener of titleListeners) listener(trimmed);
+}
+
+// Cross-tab sync: the selection is per-browser (localStorage) while tab
+// tokens are per-tab, so without this bridge a tab left open keeps saving
+// into the previously selected account after another tab switches it.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key !== ACCOUNT_KEY) return;
+    let next: { id: string; title: string } | null = null;
+    try {
+      const parsed = event.newValue
+        ? (JSON.parse(event.newValue) as { id?: unknown; title?: unknown })
+        : null;
+      next =
+        parsed && typeof parsed.id === 'string' && parsed.id
+          ? {
+              id: parsed.id,
+              title: typeof parsed.title === 'string' && parsed.title ? parsed.title : parsed.id,
+            }
+          : null;
+    } catch {
+      next = null;
+    }
+    const previousID = selectedAccount?.id ?? null;
+    const previousTitle = selectedAccount?.title ?? null;
+    selectedAccount = next;
+    if (previousID !== (next?.id ?? null)) {
+      for (const listener of accountListeners) listener(next?.id ?? null);
+    } else if (previousTitle !== (next?.title ?? null)) {
+      // Same account, new display title (silent sync in another tab).
+      for (const listener of titleListeners) listener(next?.title ?? null);
+    }
+  });
 }

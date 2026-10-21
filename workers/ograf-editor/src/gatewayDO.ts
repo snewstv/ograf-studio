@@ -20,9 +20,11 @@
  */
 import type { MCPToolName } from './catalog';
 import { NO_TAB_MESSAGE, respondToMessage } from './mcpRouter';
-import { bearerToken, verifySouvToken } from './auth';
+import { bearerToken, sha256Hex, verifySouvToken } from './auth';
 
 const TOOL_CALL_TIMEOUT_MS = 25_000;
+const VERIFY_POSITIVE_TTL_MS = 5 * 60 * 1000;
+const VERIFY_NEGATIVE_TTL_MS = 60 * 1000;
 
 interface PendingCall {
   resolve: (value: unknown) => void;
@@ -37,6 +39,15 @@ interface Env {
 export class GatewayDO {
   readonly #pending = new Map<string, PendingCall>();
   #tab: WebSocket | null = null;
+
+  /**
+   * Token-check cache scoped to this login's stub (one stub per token
+   * hash): a single Souv introspection per TTL no matter how many worker
+   * isolates forward here — this is what keeps deploys (cold isolates)
+   * from bursting the Souv API. Lost on DO eviction (safe direction:
+   * re-verify on next call).
+   */
+  readonly #verified = new Map<string, { ok: boolean; exp: number }>();
 
   constructor(
     _state: DurableObjectState,
@@ -81,7 +92,15 @@ export class GatewayDO {
 
   async #valid(token: string | null): Promise<boolean> {
     if (!token) return false;
-    return (await verifySouvToken(this.env as Record<string, unknown>, token)) !== null;
+    const hash = await sha256Hex(token);
+    const hit = this.#verified.get(hash);
+    if (hit && hit.exp > Date.now()) return hit.ok;
+    const ok = (await verifySouvToken(this.env as Record<string, unknown>, token)) !== null;
+    this.#verified.set(hash, {
+      ok,
+      exp: Date.now() + (ok ? VERIFY_POSITIVE_TTL_MS : VERIFY_NEGATIVE_TTL_MS),
+    });
+    return ok;
   }
 
   async #acceptBridge(url: URL): Promise<Response> {

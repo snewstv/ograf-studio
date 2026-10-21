@@ -382,9 +382,17 @@ const BRIDGE_URL = resolveAgentBridgeUrl(
   window.location,
 );
 
+// Fork (OG-049): the upstream localhost agent bridge is DISABLED unless
+// explicitly configured — with no `VITE_OGRAF_AGENT_BRIDGE_URL` the editor
+// must not attempt `ws://127.0.0.1:4318/editor` at all (no local MCP server
+// is part of this deployment; remote tooling uses the in-tab WebMCP host /
+// opt-in gateway socket instead). Set the env to re-enable the local bridge.
+const BRIDGE_ENABLED = Boolean(import.meta.env.VITE_OGRAF_AGENT_BRIDGE_URL?.trim());
+
 /** Keeps the live browser document and the local MCP authoring session synchronized. */
 export function useAgentBridge(): void {
   useEffect(() => {
+    if (!BRIDGE_ENABLED) return;
     let socket: WebSocket | null = null;
     let reconnectTimer: number | undefined;
     let syncTimer: number | undefined;
