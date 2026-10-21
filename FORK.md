@@ -15,6 +15,9 @@ Fork: https://github.com/snewstv/ograf-studio · modifications since 2026-10-20.
   UI Souv vive nos fluxos nativos (menu Souv com link Source, diálogos Save/Export).
 - `apps/editor/src/main.tsx`: one side-effect import of `./cloud/mount.tsx`.
 - `apps/editor/src/state/projectStore.ts`: `updateDataField` accepts `volkBinding`.
+- `apps/editor/src/state/agentBridge.ts`: the upstream localhost agent bridge
+  (`ws://127.0.0.1:4318/editor`) is disabled unless `VITE_OGRAF_AGENT_BRIDGE_URL`
+  is explicitly set (OG-049); no WebSocket is attempted otherwise.
 - `apps/editor/src/panels/DataPanel.tsx`: renders `VolkBindingEditor` in field details.
 - Root `package.json` + `apps/mcp-server/package.json`: Bun as installer/runner
   (`bun.lock` added; `package-lock.json` kept for upstream sync).

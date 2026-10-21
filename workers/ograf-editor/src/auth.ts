@@ -30,14 +30,25 @@ export async function verifySouvToken(
   if (hit && hit.exp > Date.now()) return hit.ok ? hash : null;
   let ok = false;
   try {
-    const response = await fetch(`${souvApi(env)}/api/ograf/projects`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    // Any authenticated query proves the token; keep it tiny. GraphQL errors
+    // (expired/unknown token) arrive with HTTP 200, so the envelope decides.
+    // NOTE: ografProjects is a Connection — a flat selection is rejected, so
+    // this probes the edges shape (same as the editor's list query).
+    const response = await fetch(`${souvApi(env)}/api/graphql`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: 'query OgrafList { ografProjects(first: 1) { edges { node { id } } } }',
+      }),
     });
-    // Only 2xx proves the token is accepted. Anything else (401 expired,
-    // 403/404/5xx) is invalid — a Souv outage therefore fails closed.
-    ok = response.status >= 200 && response.status < 300;
-    // Drain so sockets are reused.
-    await response.arrayBuffer().catch(() => undefined);
+    if (response.ok) {
+      const envelope = (await response.json().catch(() => null)) as {
+        errors?: Array<{ message?: string }>;
+      } | null;
+      ok = !envelope?.errors?.length;
+    } else {
+      ok = false;
+    }
   } catch (error) {
     console.error(
       '[gateway] souv introspection failed:',

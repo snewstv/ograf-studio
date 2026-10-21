@@ -17,7 +17,7 @@ npm-debug.log*
 *.tsbuildinfo
 
 # Keep internal planning and agent-session documents out of the community repository.
-/AGENTS.md
+# (Fork note: /AGENTS.md is tracked on purpose — it holds this fork's agent rules.)
 /CLAUDE.md
 /docs/handovers/
 /docs/decisions/

@@ -10,20 +10,29 @@
  * `VITE_GATEWAY_URL` on another host requires extending this list.
  *
  * `script-src` notes (verified against the deployed app):
- * - Our `index.html` ships zero inline scripts (all bundles external), so no
- *   `unsafe-inline` for our code. If Cloudflare Web Analytics is enabled for
- *   the zone, it injects its own snippet + `beacon.min.js`: the domain below
- *   lets the beacon load, while its inline snippet stays blocked (harmless —
- *   only RUM data is lost). To silence that console error entirely, disable
- *   Web Analytics for the zone in the Cloudflare dashboard.
+ * - Our `index.html` ships zero inline scripts (all bundles external).
+ * - `unsafe-inline` IS required: certification (`importModuleInRealm`) injects
+ *   an inline `<script type="module">` shim into a disposable iframe, with no
+ *   timeout — without it, save/export hang forever instead of failing. This
+ *   matches upstream posture (no CSP at all there); the content is the user's
+ *   own project in a single-user authoring tool.
+ * - `https://static.cloudflareinsights.com` lets the Cloudflare beacon load;
+ *   its injected inline snippet stays blocked (harmless — only RUM data is
+ *   lost). To silence that console error, disable Web Analytics for the zone.
+ * - `blob:` is REQUIRED: the export/certification pipeline builds the OGraf
+ *   runtime as a Blob URL and `import()`s it dynamically (including inside
+ *   the certification iframe). Without it, save/export hang or fail with
+ *   "Failed to fetch dynamically imported module: blob:...". Blob URLs can
+ *   only be created by the page's own code, so the risk stays contained.
  * - `unsafe-eval` is REQUIRED at runtime: Ajv (bundled in the capture chunk)
- *   compiles JSON schemas via `new Function`. Upstream never hit this because
- *   it serves with no CSP at all. There is no `wasm-unsafe-eval`-only way.
+ *   compiles JSON schemas via `new Function`.
  */
 export const CSP_SCRIPT_SRC = [
   "'self'",
   'https://static.cloudflareinsights.com',
+  "'unsafe-inline'",
   "'unsafe-eval'",
+  'blob:',
 ].join(' ');
 export const CSP_CONNECT_SRC = [
   "'self'",
