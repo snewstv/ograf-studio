@@ -76,12 +76,12 @@ function flushPending(): void {
 
 /** Commits any pending edit burst before and after one explicit command such as Duplicate. */
 export function runDiscreteHistoryStep<T>(mutation: () => T, label?: string): T {
-  window.clearTimeout(debounceTimer);
+  clearTimeout(debounceTimer);
   flushPending();
   try {
     return mutation();
   } finally {
-    window.clearTimeout(debounceTimer);
+    clearTimeout(debounceTimer);
     if (pendingEntry && label) pendingEntry.label = label;
     flushPending();
   }
@@ -121,7 +121,7 @@ export function applyRemoteProjectUpdate(project: Project, update: RemoteHistory
     resetHistory();
     return;
   }
-  window.clearTimeout(debounceTimer);
+  clearTimeout(debounceTimer);
   flushPending();
   const stack = update.source === 'undo' ? past : update.source === 'redo' ? future : [];
   if (stack.length && JSON.stringify(stack.at(-1)!.project) === JSON.stringify(project)) {
@@ -155,7 +155,7 @@ useProjectStore.subscribe((state) => {
     pendingEntry.timestamp = Date.now();
   }
   future = [];
-  window.clearTimeout(debounceTimer);
+  clearTimeout(debounceTimer);
   debounceTimer = setTimeout(flushPending, DEBOUNCE_MS);
   previousProject = state.project;
   publishHistory();
@@ -205,7 +205,7 @@ function reconcileLayerSelection(): void {
 }
 
 export function undo(steps = 1): void {
-  window.clearTimeout(debounceTimer);
+  clearTimeout(debounceTimer);
   flushPending();
   let restored = useProjectStore.getState().project;
   let applied = 0;
@@ -225,7 +225,7 @@ export function undo(steps = 1): void {
 }
 
 export function redo(steps = 1): void {
-  window.clearTimeout(debounceTimer);
+  clearTimeout(debounceTimer);
   flushPending();
   let restored = useProjectStore.getState().project;
   let applied = 0;
@@ -249,7 +249,7 @@ export function resetHistory(): void {
   past = [];
   future = [];
   pendingEntry = null;
-  window.clearTimeout(debounceTimer);
+  clearTimeout(debounceTimer);
   previousProject = useProjectStore.getState().project;
   publishHistory();
 }

@@ -33,13 +33,24 @@ export async function verifySouvToken(
     // (expired/unknown token) arrive with HTTP 200, so the envelope decides.
     // NOTE: ografProjects is a Connection — a flat selection is rejected, so
     // this probes the edges shape (same as the editor's list query).
-    const response = await fetch(`${souvApi(env)}/api/graphql`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query: 'query OgrafList { ografProjects(first: 1) { edges { node { id } } } }',
-      }),
-    });
+    // Fail fast: without a timeout a stalled Souv API would hang the
+    // handshake forever (the tab watchdog closes it client-side, but the
+    // worker must also settle so retries can proceed on a fresh attempt).
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    let response: Response;
+    try {
+      response = await fetch(`${souvApi(env)}/api/graphql`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: 'query OgrafList { ografProjects(first: 1) { edges { node { id } } } }',
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
     if (response.ok) {
       const envelope = (await response.json().catch(() => null)) as {
         errors?: Array<{ message?: string }>;

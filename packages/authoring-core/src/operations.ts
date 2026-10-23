@@ -763,6 +763,9 @@ export function applyAuthoringOperations(
   };
 
   operations.forEach((operation, operationIndex) => {
+    if (!operation || typeof operation !== 'object' || typeof operation.type !== 'string') {
+      throw new Error('Operation must be an object with a string type field.');
+    }
     recordOperation(summary, operation);
     if (operation.type === 'set_project_metadata') {
       if (operation.thumbnailFrame !== undefined) project.thumbnailFrame = operation.thumbnailFrame;
@@ -1460,6 +1463,9 @@ export function applyAuthoringOperations(
       case 'set_layer_semantics': {
         const layer = layerFor(composition, operation.layerId);
         assertUnlocked(layer);
+        if (!operation.patch || typeof operation.patch !== 'object') {
+          throw new Error("set_layer_semantics requires a 'patch' object with semantics fields.");
+        }
         if (operation.patch.role !== undefined) layer.semantics.role = operation.patch.role;
         if (operation.patch.description !== undefined)
           layer.semantics.description = operation.patch.description.trim();
@@ -1620,6 +1626,9 @@ export function applyAuthoringOperations(
       case 'update_element': {
         const layer = layerFor(composition, operation.layerId);
         assertUnlocked(layer);
+        if (!operation.patch || typeof operation.patch !== 'object') {
+          throw new Error("update_element requires a 'patch' object with element fields.");
+        }
         const legacyShaderPatch =
           operation.patch.type === 'shader' &&
           layer.element.type === 'rectangle' &&
@@ -1772,6 +1781,9 @@ export function applyAuthoringOperations(
       case 'update_transform': {
         const layer = layerFor(composition, operation.layerId);
         assertUnlocked(layer);
+        if (!operation.patch || typeof operation.patch !== 'object') {
+          throw new Error("update_transform requires a 'patch' object with transform fields.");
+        }
         const patch = normalizeAuthoredTransformPatch(operation.patch);
         const frames = operationFrames(composition, operation.scope, operation.frame);
         for (const frame of frames) {
@@ -1813,6 +1825,9 @@ export function applyAuthoringOperations(
       case 'update_effect': {
         const layer = layerFor(composition, operation.layerId);
         assertUnlocked(layer);
+        if (!operation.patch || typeof operation.patch !== 'object') {
+          throw new Error("update_effect requires a 'patch' object with effect fields.");
+        }
         const effect = updateEffect(layer, operation.effectId, operation.patch);
         for (const [param, value] of Object.entries(operation.patch.params ?? {}))
           if (typeof value === 'number')
@@ -1838,6 +1853,9 @@ export function applyAuthoringOperations(
       case 'update_effects': {
         const layer = layerFor(composition, operation.layerId);
         assertUnlocked(layer);
+        if (!operation.patch || typeof operation.patch !== 'object') {
+          throw new Error("update_effects requires a 'patch' object with effects fields.");
+        }
         layer.effects = ensureLegacyEffects(
           normalizeLayerEffects({ ...layer.effects, ...operation.patch }),
           operation.patch,

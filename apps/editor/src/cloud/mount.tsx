@@ -8,12 +8,15 @@
  */
 import { consumeTokenFromLocation, isSouvLoggedIn, checkCookieSession } from './souvAuth';
 import { registerWebMCPTools } from './webmcpHost';
-import { startGatewayBridge } from './gatewaySocket';
+import { consumeAiChatFlagFromLocation, startGatewayBridge } from './gatewaySocket';
+import { startAiAssistantBridge } from '../state/agentBridge';
 
 if (typeof window !== 'undefined') {
+  consumeAiChatFlagFromLocation();
   consumeTokenFromLocation();
   // A cookie session from another tab isn't visible until probed once.
   if (!isSouvLoggedIn()) void checkCookieSession();
   void registerWebMCPTools().catch(() => undefined);
   startGatewayBridge();
+  startAiAssistantBridge();
 }

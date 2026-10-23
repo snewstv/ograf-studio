@@ -20,6 +20,16 @@ import {
   type AgentStripRequest,
 } from './agentCapture';
 import type { AgentLayerReference } from './agentLayerReference';
+import { isAiChatEnabled, sendAiChatTurn } from '../cloud/aiChatClient';
+import {
+  ensureBridgeForAI,
+  getGatewayBridgeStatus,
+  onGatewayBridgeChange,
+  type GatewayBridgeStatus,
+} from '../cloud/gatewaySocket';
+import { normalizeOperationSelectors } from '@ograf-editor/agent-tools/normalize-operations';
+import { applyAuthoringOperations } from '@ograf-editor/authoring-core';
+import { assertKnownOperationTypes, webmcpFallbackBridge } from '../cloud/webmcpHost';
 
 interface AgentBridgeStatus {
   connected: boolean;
@@ -179,23 +189,66 @@ export function decideAgentProposal(proposalId: string, decision: 'accept' | 're
   sendProposalDecision({ type: 'proposal.decision', proposalId, decision });
 }
 
-export function sendAgentChat(
-  text: string,
-  references: AgentLayerReference[] = [],
-  areaReferences: AgentAreaReference[] = [],
-): void {
-  if (!sendChatPayload || !text.trim()) return;
-  const turnId = crypto.randomUUID();
+// Fork (OG-092/OG-093): worker-driven AI transport. When VITE_AI_CHAT=1 the
+// prompt goes to POST /ai/chat (Workers AI) instead of the localhost socket;
+// the worker loop calls back into THIS tab through its per-tab GatewayDO
+// stub. Localhost behavior below is untouched when the flag is off.
+let aiAbort: AbortController | null = null;
+let aiBridgeStarted = false;
+/** Worker-proposed operations awaiting human Accept/Reject in the panel. */
+const aiProposalOperations = new Map<string, Array<Record<string, unknown>>>();
+/** Last tool error per worker turn: a turn that ends with no assistant text
+ * after a tool error becomes a visible chat error instead of a silent
+ * `Completed` with an empty message. Cleared on `ok` and on turn end. */
+const aiTurnToolErrors = new Map<string, string>();
+
+function buildChatAmbient(
+  references: AgentLayerReference[],
+  areaReferences: AgentAreaReference[],
+): Record<string, unknown> {
   const selection = useSelectionStore.getState();
   const timeline = useTimelineStore.getState();
   const activity = useAgentBridgeStatus.getState().activity;
-  const projectId = useProjectStore.getState().project.id;
   const referencedLayerIds = references.map((reference) => reference.layerId);
+  return {
+    selection: {
+      layerIds: areaReferences.length
+        ? []
+        : referencedLayerIds.length
+          ? referencedLayerIds
+          : selection.selectedLayerIds,
+      primaryLayerId: areaReferences.length
+        ? null
+        : (referencedLayerIds[0] ?? selection.selectedLayerId),
+    },
+    ...(references.length ? { references } : {}),
+    frame: timeline.currentFrame,
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      zoom: Number(
+        document.querySelector<HTMLElement>('.canvas-stage-viewport')?.dataset.ografZoom ?? 1,
+      ),
+    },
+    recentEdits: activity && activity !== 'Agent connected' ? [activity] : [],
+  };
+}
+
+function workerHistory(): Array<{ role: 'user' | 'assistant'; text: string }> {
+  return useAgentChatStore
+    .getState()
+    .entries.filter((entry) => entry.kind === 'user' || entry.kind === 'assistant')
+    .slice(-10)
+    .map((entry) => ({ role: entry.kind as 'user' | 'assistant', text: entry.text }));
+}
+
+function beginChatTurn(text: string, areaReferences: AgentAreaReference[]): string {
+  const turnId = crypto.randomUUID();
   useAgentChatStore.getState().addEntry({
     id: `user-${turnId}`,
     turnId,
     kind: 'user',
-    text: text.trim(),
+    text,
     ...(areaReferences.length
       ? {
           areaSummaries: areaReferences.map((area, index) => ({
@@ -218,40 +271,387 @@ export function sendAgentChat(
       updatedAt: Date.now(),
     },
   });
+  return turnId;
+}
+
+function aiChatError(turnId: string, message: string): void {
+  const chat = useAgentChatStore.getState();
+  if (chat.activeTurnId !== turnId) return;
+  chat.setState({
+    activeTurnId: null,
+    activeTurnStartedAt: null,
+    pendingAssistantText: '',
+    progress: {
+      phase: 'error',
+      message,
+      round: chat.progress?.round ?? 1,
+      updatedAt: Date.now(),
+    },
+  });
+  chat.addEntry({ id: `error-${turnId}`, turnId, kind: 'error', text: message });
+}
+
+function cancelAiTurn(): void {
+  aiAbort?.abort();
+  aiAbort = null;
+  const chat = useAgentChatStore.getState();
+  if (!chat.activeTurnId) return;
+  const turnId = chat.activeTurnId;
+  chat.setState({
+    activeTurnId: null,
+    activeTurnStartedAt: null,
+    pendingAssistantText: '',
+    progress: {
+      phase: 'complete',
+      message: 'Cancelled',
+      round: chat.progress?.round ?? 1,
+      updatedAt: Date.now(),
+    },
+  });
+  chat.addEntry({ id: `assistant-${turnId}`, turnId, kind: 'assistant', text: 'Cancelled.' });
+}
+export function sendAgentChat(
+  text: string,
+  references: AgentLayerReference[] = [],
+  areaReferences: AgentAreaReference[] = [],
+): void {
+  if (!text.trim()) return;
+  if (isAiChatEnabled()) {
+    sendAgentChatViaWorker(text.trim(), references, areaReferences);
+    return;
+  }
+  if (!sendChatPayload) return;
+  const projectId = useProjectStore.getState().project.id;
+  const turnId = beginChatTurn(text.trim(), areaReferences);
   sendChatPayload({
     type: 'chat.send',
     turnId,
     sessionId: `editor:${projectId}`,
     text: text.trim(),
     ...(areaReferences.length ? { areaReferences } : {}),
-    ambient: {
-      selection: {
-        layerIds: areaReferences.length
-          ? []
-          : referencedLayerIds.length
-            ? referencedLayerIds
-            : selection.selectedLayerIds,
-        primaryLayerId: areaReferences.length
-          ? null
-          : (referencedLayerIds[0] ?? selection.selectedLayerId),
-      },
-      ...(references.length ? { references } : {}),
-      frame: timeline.currentFrame,
-      viewport: {
-        width: window.innerWidth,
-        height: window.innerHeight,
-        zoom: Number(
-          document.querySelector<HTMLElement>('.canvas-stage-viewport')?.dataset.ografZoom ?? 1,
-        ),
-      },
-      recentEdits: activity && activity !== 'Agent connected' ? [activity] : [],
-    },
+    ambient: buildChatAmbient(references, areaReferences),
   });
 }
 
 export function cancelAgentChat(): void {
+  if (isAiChatEnabled()) {
+    cancelAiTurn();
+    return;
+  }
   const turnId = useAgentChatStore.getState().activeTurnId;
   if (turnId) sendChatPayload?.({ type: 'chat.cancel', turnId });
+}
+
+function sendAgentChatViaWorker(
+  text: string,
+  references: AgentLayerReference[],
+  areaReferences: AgentAreaReference[],
+): void {
+  const projectId = useProjectStore.getState().project.id;
+  const turnId = beginChatTurn(text, areaReferences);
+  ensureBridgeForAI();
+  const controller = new AbortController();
+  aiAbort = controller;
+  void sendAiChatTurn(
+    {
+      turnId,
+      sessionId: `editor:${projectId}`,
+      text,
+      ambient: buildChatAmbient(references, areaReferences),
+      ...(areaReferences.length ? { areaReferences } : {}),
+      history: workerHistory(),
+    },
+    controller.signal,
+    (event) => handleAiChatEvent(event),
+  ).catch((error) => {
+    if (controller.signal.aborted) return;
+    aiChatError(turnId, error instanceof Error ? error.message : String(error));
+  });
+}
+
+function handleAiChatEvent(event: Record<string, unknown>): void {
+  const turnId = typeof event.turnId === 'string' ? event.turnId : '';
+  switch (event.type) {
+    case 'chat.config': {
+      useAgentChatStore.getState().setState({
+        configured: typeof event.configured === 'boolean' ? event.configured : true,
+        exclusive: event.exclusive === true,
+        provider: typeof event.provider === 'string' ? event.provider : 'workers-ai',
+        model: typeof event.model === 'string' ? event.model : null,
+        configMessage: typeof event.message === 'string' ? event.message : null,
+        projectUsage: readProjectUsage(useProjectStore.getState().project.id),
+      });
+      return;
+    }
+    case 'chat.progress': {
+      updateAgentChatActivity({
+        type: 'chat.progress',
+        turnId,
+        phase: event.phase === 'waiting' ? 'waiting' : 'continuing',
+        message: typeof event.message === 'string' ? event.message : 'Working…',
+        round: typeof event.round === 'number' ? event.round : 1,
+      });
+      return;
+    }
+    case 'chat.text': {
+      updateAgentChatActivity({
+        type: 'chat.text',
+        turnId,
+        text: typeof event.text === 'string' ? event.text : '',
+      });
+      return;
+    }
+    case 'chat.tool': {
+      const toolStatus =
+        event.status === 'running' ? 'running' : event.status === 'ok' ? 'ok' : 'error';
+      const toolName = typeof event.name === 'string' ? event.name : 'tool';
+      if (toolStatus === 'error') {
+        const detail =
+          typeof event.error === 'string' && event.error
+            ? event.error
+            : 'Tool ' + toolName + ' failed.';
+        aiTurnToolErrors.set(turnId, detail);
+      } else if (toolStatus === 'ok') {
+        aiTurnToolErrors.delete(turnId);
+      }
+      updateAgentChatActivity({
+        type: 'chat.tool',
+        turnId,
+        callId: typeof event.callId === 'string' ? event.callId : '',
+        name: toolName,
+        summary: typeof event.summary === 'string' ? event.summary : 'tool',
+        status: toolStatus,
+      });
+      return;
+    }
+    case 'chat.proposal': {
+      const proposalId = typeof event.proposalId === 'string' ? event.proposalId : turnId;
+      updateAgentChatActivity({ type: 'chat.proposal', turnId, proposalId });
+      presentAiProposal(turnId, proposalId, event.proposal);
+      return;
+    }
+    case 'chat.turn.end': {
+      const usageRecord = (event.usage ?? {}) as Record<string, unknown>;
+      const amount = (value: unknown) =>
+        typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+      const pendingText = useAgentChatStore.getState().pendingAssistantText;
+      const toolError = aiTurnToolErrors.get(turnId);
+      aiTurnToolErrors.delete(turnId);
+      if (!pendingText && toolError) {
+        aiChatError(turnId, toolError);
+        return;
+      }
+      finishAgentChatTurn({
+        type: 'chat.turn.end',
+        turnId,
+        stopReason: typeof event.stopReason === 'string' ? event.stopReason : 'done',
+        usage: {
+          input: amount(usageRecord.input),
+          output: amount(usageRecord.output),
+          cacheRead: amount(usageRecord.cacheRead),
+        },
+      });
+      return;
+    }
+    case 'chat.error': {
+      aiChatError(
+        turnId,
+        typeof event.message === 'string' && event.message
+          ? event.message
+          : 'The AI worker connection ended before the turn completed.',
+      );
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+/**
+ * Presents a worker-proposed batch in the existing review UI (OG-093). The
+ * proposed project is computed in-tab so the canvas preview, Accept and
+ * Reject work exactly like localhost proposals; `decideAgentProposal`, the
+ * review store and export paths are untouched.
+ *
+ * An invalid batch never reaches the review as a dead proposal: the tab
+ * validates first (known types via the shared catalog, then full
+ * normalization) and failures surface as a chat error instead, so the
+ * worker can correct them within the turn.
+ */
+function presentAiProposal(turnId: string, proposalId: string, raw: unknown): void {
+  const record = (raw ?? {}) as {
+    title?: unknown;
+    description?: unknown;
+    operations?: unknown;
+    sessionId?: unknown;
+  };
+  const operations = Array.isArray(record.operations)
+    ? (record.operations as Array<Record<string, unknown>>)
+    : [];
+  const project = useProjectStore.getState().project;
+  let previewProject: Project | undefined;
+  let operationTypes: string[] = [];
+  try {
+    assertKnownOperationTypes(operations);
+    const typed = normalizeOperationSelectors(project, operations);
+    previewProject = applyAuthoringOperations(project, typed).project;
+    operationTypes = typed.map((operation) => operation?.type ?? 'unknown');
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    aiChatError(turnId, 'Could not preview the proposal: ' + detail);
+    return;
+  }
+  if (operations.length > 0) aiProposalOperations.set(proposalId, operations);
+  useTimelineStore.getState().controller?.pause();
+  useTimelineStore.getState().setPreviewLoopLayerId(null);
+  const title =
+    typeof record.title === 'string' && record.title ? record.title : 'Proposed changes';
+  useAgentReviewStore.getState().present(
+    {
+      id: proposalId,
+      title,
+      description: typeof record.description === 'string' ? record.description : '',
+      sessionId: typeof record.sessionId === 'string' ? record.sessionId : `editor:${project.id}`,
+      baseRevision: useAgentBridgeStatus.getState().revision ?? 0,
+      operationTypes,
+      operationCount: operations.length,
+      previewUrl: '',
+      // No remote URL expires here: the preview is rendered in-tab from
+      // `previewProject`. AppShell still sweeps on this timestamp, so give
+      // the review a real window instead of expiring it on arrival.
+      previewExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      render: 'frame',
+      frames: [useTimelineStore.getState().currentFrame],
+      valid: previewProject !== undefined,
+      warnings: [],
+      ...(previewProject ? { project: previewProject } : {}),
+      compositionId: useProjectStore.getState().activeCompositionId ?? undefined,
+    },
+    project,
+    undefined,
+  );
+  useAgentBridgeStatus.getState().setStatus({ activity: `Review requested: ${title}` });
+}
+
+/** In-tab decision path for worker proposals (Accept applies live, undoable). */
+async function decideAiProposal(payload: unknown): Promise<void> {
+  const record = (payload ?? {}) as { proposalId?: unknown; decision?: unknown };
+  if (typeof record.proposalId !== 'string') return;
+  if (record.decision !== 'accept' && record.decision !== 'reject') return;
+  const proposalId = record.proposalId;
+  const decision = record.decision;
+  const store = useAgentReviewStore.getState();
+  const proposal = store.proposals.find((item) => item.id === proposalId);
+  const connection = useAgentBridgeStatus.getState();
+  // NOTE: the exported decideAgentProposal marks `deciding` BEFORE delegating
+  // here, so a set flag equal to this decision means our own in-flight work —
+  // not someone else's. (Repeated clicks are already stopped by the exported
+  // wrapper, which returns early while `deciding` is set.)
+  if (!proposal || (proposal.deciding && proposal.deciding !== decision)) return;
+  if (decision === 'reject') {
+    store.update(proposalId, { deciding: 'reject' });
+    aiProposalOperations.delete(proposalId);
+    store.resolve(proposalId, { status: 'rejected', message: 'Proposal rejected.' });
+    connection.setStatus({ activity: 'Proposal rejected.' });
+    return;
+  }
+  if (!proposal.valid || proposal.staleReason || !proposal.previewReady) return;
+  const operations = aiProposalOperations.get(proposalId);
+  if (!operations) return;
+  store.update(proposalId, { deciding: 'accept' });
+  connection.setStatus({ activity: 'Applying accepted agent proposal…' });
+  try {
+    const result = (await webmcpFallbackBridge.executeTool('ograf_apply_operations', {
+      operations,
+      expectedRevision: 0,
+      mode: 'apply',
+      reason: `Accepted proposal: ${proposal.title}`,
+    })) as { operationCount?: unknown; operationTypes?: unknown };
+    aiProposalOperations.delete(proposalId);
+    const count =
+      typeof result?.operationCount === 'number' ? result.operationCount : operations.length;
+    const types = Array.isArray(result?.operationTypes)
+      ? (result.operationTypes as string[])
+      : proposal.operationTypes;
+    const detail = types.length > 0 ? ` — ${types.join(', ')}` : '';
+    const state = useProjectStore.getState();
+    const composition = state.project.compositions.find(
+      (item) => item.id === (proposal.compositionId ?? state.project.mainCompositionId),
+    );
+    if (composition) {
+      useProjectStore.setState({ activeCompositionId: composition.id });
+      useTimelineStore
+        .getState()
+        .setCurrentFrame(Math.min(proposal.previewFrame, getTotalFrames(composition)));
+    }
+    store.resolve(proposalId, {
+      status: 'accepted',
+      message: `Agent: ${count} change${count === 1 ? '' : 's'}${detail}`,
+    });
+    connection.setStatus({
+      revision: connection.revision,
+      activity: `Agent: ${count} change${count === 1 ? '' : 's'}${detail}`,
+    });
+  } catch (error) {
+    store.update(proposalId, { deciding: null });
+    connection.setStatus({
+      activity: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Starts the worker-driven AI Assistant seam (OG-092). No-op unless
+ * `VITE_AI_CHAT=1`. Call once from the cloud mount; localhost wiring is
+ * untouched. Mirrors the tab bridge (shared slot with external MCP) into the
+ * legacy status store so review Accept/Reject guards see the live tab, and
+ * routes proposal decisions to the in-tab apply path.
+ */
+export function startAiAssistantBridge(): void {
+  if (!isAiChatEnabled() || aiBridgeStarted) return;
+  aiBridgeStarted = true;
+  const mirror = (status: GatewayBridgeStatus) => {
+    const current = useAgentBridgeStatus.getState();
+    if (status === 'connected') {
+      current.setStatus({
+        connected: true,
+        authoritative: true,
+        ...(current.activity === 'Agent bridge offline'
+          ? { activity: 'AI assistant connected' }
+          : {}),
+      });
+    } else if (status === 'connecting') {
+      if (!current.connected) current.setStatus({ activity: 'AI assistant connecting…' });
+    } else if (status === 'replaced') {
+      current.setStatus({
+        connected: false,
+        authoritative: false,
+        activity: 'This tab is not the active editor session.',
+      });
+    } else if (!useAgentChatStore.getState().activeTurnId) {
+      current.setStatus({ connected: false, activity: 'Agent bridge offline' });
+    } else {
+      current.setStatus({ connected: false });
+    }
+  };
+  mirror(getGatewayBridgeStatus());
+  onGatewayBridgeChange(mirror);
+  // Real expiry, mirroring the localhost bridge: a project change after a
+  // proposal was presented invalidates pending reviews (AI applies also
+  // flow through here, so an applied turn correctly stales older proposals).
+  useProjectStore.subscribe((state, previous) => {
+    if (state.project === previous.project) return;
+    useAgentReviewStore
+      .getState()
+      .invalidate('The template changed. Ask the assistant to regenerate this proposal.');
+    if (state.project.id !== previous.project.id) {
+      useAgentChatStore.getState().setState({ projectUsage: readProjectUsage(state.project.id) });
+    }
+  });
+  ensureBridgeForAI();
+  sendProposalDecision = (payload: unknown) => {
+    void decideAiProposal(payload);
+  };
 }
 
 export function setAgentChatExclusive(enabled: boolean): void {

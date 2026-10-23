@@ -15,12 +15,21 @@ observability = { enabled = true }
 # migration tag makes the class deploy-ready without further changes.
 durable_objects.bindings = [{ name = "GATEWAY", class_name = "GatewayDO" }]
 
+# Workers AI binding for the in-tab AI Assistant chat route (OG-090).
+# `remote = true` keeps local dev working (Workers AI has no local runtime).
+# Named envs repeat it below: bindings are not inherited (see OG-091 note).
+ai = { binding = "AI", remote = true }
+
 [exports.GatewayDO]
 type = "durable-object"
 storage = "sqlite"
 
 [vars]
 SOUV_API = "https://api.souv.live:8787"
+# Default Workers AI model for the in-tab AI Assistant (OG-090). Override per
+# env as needed; DeepSeek Flash requires the Workers Paid plan or AI Gateway
+# credits.
+AI_MODEL = "@cf/deepseek-ai/deepseek-v4.1-flash-1017"
 
 [env.develop]
 name = "ograf-studio-dev"
@@ -28,8 +37,13 @@ workers_dev = true
 routes = [
   { pattern = "ograf.souv.dev", zone_name = "souv.dev", custom_domain = true },
 ]
+# Bindings are not inherited by named environments: repeat them per env.
+durable_objects.bindings = [{ name = "GATEWAY", class_name = "GatewayDO" }]
+ai = { binding = "AI" }
+
 [env.develop.vars]
 SOUV_API = "https://api.souv.dev"
+AI_MODEL = "@cf/deepseek-ai/deepseek-v4.1-flash-1017"
 
 [env.production]
 name = "ograf-studio"
@@ -37,5 +51,9 @@ workers_dev = false
 routes = [
   { pattern = "ograf.souv.tv", zone_name = "souv.tv", custom_domain = true },
 ]
+durable_objects.bindings = [{ name = "GATEWAY", class_name = "GatewayDO" }]
+ai = { binding = "AI" }
+
 [env.production.vars]
 SOUV_API = "https://api.souv.tv"
+AI_MODEL = "@cf/deepseek-ai/deepseek-v4.1-flash-1017"

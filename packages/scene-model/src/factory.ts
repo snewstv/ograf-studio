@@ -283,6 +283,12 @@ export function createLayerOfKind(kind: NewLayerKind): Layer {
       return createLottieLayer();
     case 'shader':
       return createShaderLayer();
+    default:
+      throw new Error(
+        'Unknown layer kind: ' +
+          JSON.stringify(kind) +
+          '. Valid kinds: rectangle, ellipse, text, image, path, pattern, image-sequence, lottie, shader.',
+      );
   }
 }
 

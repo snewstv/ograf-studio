@@ -17,10 +17,13 @@ describe('webmcp fallback bridge (OG-028C/028I)', () => {
     expect(result.tools).toContain('ograf_apply_operations');
   });
 
-  it('holds mutations as validated reviewable proposals', async () => {
+  // OG-093: propose/dry-run/preview stay proposal-only for human Accept;
+  // default/apply now validates and mutates the live tab (webmcpApply.test.ts).
+  it('holds propose-mode mutations as validated reviewable proposals', async () => {
     const result = (await webmcpFallbackBridge.executeTool('ograf_apply_operations', {
-      operations: [{ type: 'noop' }],
+      operations: [{ type: 'set_project_metadata', name: 'Proposed' }],
       expectedRevision: 3,
+      mode: 'propose',
     })) as { mode: string; accepted: boolean; operationCount: number; expectedRevision: number };
     expect(result.mode).toBe('proposal');
     expect(result.accepted).toBe(false);
@@ -31,7 +34,7 @@ describe('webmcp fallback bridge (OG-028C/028I)', () => {
   it('rejects malformed apply batches before proposing', async () => {
     await expect(
       webmcpFallbackBridge.executeTool('ograf_apply_operations', {
-        operations: [{ type: 'noop' }],
+        operations: [{ type: 'set_project_metadata', name: 'x' }],
       }),
     ).rejects.toThrow(/expectedRevision/);
     await expect(
@@ -43,26 +46,14 @@ describe('webmcp fallback bridge (OG-028C/028I)', () => {
   });
 
   it('undo/redo report whether history actually moved', async () => {
-    // historyStore drives timers through `window`: stub the two functions it
-    // uses so the empty-history path runs in node. A real browser tab has them.
-    const g = globalThis as unknown as Record<string, unknown>;
-    const previousWindow = g.window;
-    g.window = {
-      clearTimeout: (...args: Parameters<typeof clearTimeout>) => clearTimeout(...args),
-      setTimeout: (...args: Parameters<typeof setTimeout>) => setTimeout(...args),
-    };
-    try {
-      // Empty history in tests: nothing moves, so applied is false. A tab
-      // with real edits reports true.
-      await expect(webmcpFallbackBridge.executeTool('ograf_undo', {})).resolves.toMatchObject({
-        applied: false,
-      });
-      await expect(webmcpFallbackBridge.executeTool('ograf_redo', {})).resolves.toMatchObject({
-        applied: false,
-      });
-    } finally {
-      if (previousWindow === undefined) delete g.window;
-      else g.window = previousWindow;
-    }
+    // Empty history in tests: nothing moves, so applied is false. A tab
+    // with real edits reports true. historyStore uses global timers, so no
+    // `window` stub is needed in node.
+    await expect(webmcpFallbackBridge.executeTool('ograf_undo', {})).resolves.toMatchObject({
+      applied: false,
+    });
+    await expect(webmcpFallbackBridge.executeTool('ograf_redo', {})).resolves.toMatchObject({
+      applied: false,
+    });
   });
 });

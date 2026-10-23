@@ -13,13 +13,14 @@ import type {
 const clone = <T>(value: T): T => structuredClone(value);
 
 export class RevisionConflictError extends Error {
-  constructor(
-    readonly expectedRevision: number,
-    readonly actualRevision: number,
-  ) {
+  readonly expectedRevision: number;
+  readonly actualRevision: number;
+  constructor(expectedRevision: number, actualRevision: number) {
     super(
       `Revision conflict: expected ${expectedRevision}, current revision is ${actualRevision}.`,
     );
+    this.expectedRevision = expectedRevision;
+    this.actualRevision = actualRevision;
     this.name = 'RevisionConflictError';
   }
 }

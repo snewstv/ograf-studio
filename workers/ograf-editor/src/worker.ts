@@ -15,6 +15,7 @@
 import { bearerToken, sha256Hex } from './auth';
 import { EDITOR_CSP } from './csp';
 import { GatewayDO } from './gatewayDO';
+import { handleAiChat } from './aiChat';
 
 export { GatewayDO };
 
@@ -25,6 +26,7 @@ interface GatewayEnv extends Record<string, unknown> {
 async function gatewayStub(
   env: GatewayEnv,
   token: string | null,
+  tabId?: string | null,
 ): Promise<{ stub: DurableObjectStub } | { response: Response }> {
   if (!token) {
     return {
@@ -41,14 +43,31 @@ async function gatewayStub(
   if (!namespace) {
     return { response: new Response('Gateway binding missing', { status: 500 }) };
   }
-  return { stub: namespace.get(namespace.idFromName(`gateway-${await sha256Hex(token)}`)) };
+  // One stub per login (MCP clients, no tabId) or per login+tab (editor
+  // tabs): concurrent tabs on different projects never share a slot.
+  const scope = tabId ? token + '\n' + tabId : token;
+  return { stub: namespace.get(namespace.idFromName('gateway-' + (await sha256Hex(scope)))) };
 }
 
 export default {
   async fetch(request: Request, env: Record<string, unknown>): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === '/health' || url.pathname === '/api/health') {
-      return Response.json({ ok: true, worker: 'ograf-studio-cloud', assets: true, mcp: '/mcp' });
+      const record = env as Record<string, unknown>;
+      return Response.json({
+        ok: true,
+        worker: 'ograf-studio-cloud',
+        // Baked by scripts/wrangler.mjs as --var GIT_REV (falls back to 'dev').
+        rev: typeof record.GIT_REV === 'string' && record.GIT_REV ? record.GIT_REV : 'dev',
+        assets: true,
+        mcp: '/mcp',
+        // Binding presence straight from the runtime env: answers forever
+        // which config a deployment actually runs with (e.g. missing GATEWAY).
+        bindings: {
+          gateway: record.GATEWAY !== undefined && record.GATEWAY !== null,
+          ai: record.AI !== undefined && record.AI !== null,
+        },
+      });
     }
     if (url.pathname === '/mcp') {
       const routed = await gatewayStub(env as GatewayEnv, bearerToken(request));
@@ -56,9 +75,19 @@ export default {
       return routed.stub.fetch(request);
     }
     if (url.pathname === '/bridge') {
-      const routed = await gatewayStub(env as GatewayEnv, url.searchParams.get('token'));
+      const routed = await gatewayStub(
+        env as GatewayEnv,
+        url.searchParams.get('token'),
+        url.searchParams.get('tabId'),
+      );
       if ('response' in routed) return routed.response;
       return routed.stub.fetch(request);
+    }
+    // Worker AI chat for the in-tab AI Assistant (OG-090): same-origin POST.
+    // Same Bearer gate as `/mcp`; the agentic tool loop fans out to the
+    // ORIGIN TAB through its per-tab GatewayDO stub (tabId from the body).
+    if (url.pathname === '/ai/chat') {
+      return handleAiChat(request, env);
     }
     // Let the assets binding serve everything else (including SPA fallback).
     const assets = (env as { ASSETS?: { fetch: typeof fetch } }).ASSETS;

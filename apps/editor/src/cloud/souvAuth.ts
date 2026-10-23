@@ -358,7 +358,10 @@ export function syncSouvAccTitle(title: string): void {
 // Cross-tab sync: the selection is per-browser (localStorage) while tab
 // tokens are per-tab, so without this bridge a tab left open keeps saving
 // into the previously selected account after another tab switches it.
-if (typeof window !== 'undefined') {
+// Guarded for module import in non-DOM runtimes (node tests import this
+// module transitively through the AI seam): without a real `window` the
+// sync simply has nothing to listen to.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('storage', (event) => {
     if (event.key !== ACCOUNT_KEY) return;
     let next: { id: string; title: string } | null = null;

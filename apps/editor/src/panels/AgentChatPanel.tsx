@@ -14,6 +14,14 @@ import {
   useAgentBridgeStatus,
   useAgentChatStore,
 } from '../state/agentBridge';
+import { isAiChatEnabled } from '../cloud/aiChatClient';
+import {
+  ensureBridgeForAI,
+  getGatewayBridgeStatus,
+  onGatewayBridgeChange,
+  type GatewayBridgeStatus,
+} from '../cloud/gatewaySocket';
+import { getSouvToken, loginWithSouvPopup, onSouvAuthChange } from '../cloud/souvAuth';
 import {
   AGENT_LAYER_REFERENCE_MIME,
   decodeAgentLayerReference,
@@ -36,10 +44,26 @@ function elapsedLabel(seconds: number): string {
   return minutes ? `${minutes}:${remainder.toString().padStart(2, '0')}` : `${remainder}s`;
 }
 
+/** Tab bridge status for the worker-driven assistant (OG-092). */
+function useGatewayBridgeStatus(): GatewayBridgeStatus {
+  const [status, setStatus] = useState<GatewayBridgeStatus>(() => getGatewayBridgeStatus());
+  useEffect(() => onGatewayBridgeChange(setStatus), []);
+  return status;
+}
+
+/** Bearer token for the worker assistant (bridge + `/ai/chat` need it). */
+function useSouvToken(): string | null {
+  const [token, setToken] = useState<string | null>(() => getSouvToken());
+  useEffect(() => onSouvAuthChange(setToken), []);
+  return token;
+}
+
 export function AgentChatPanel() {
   const [text, setText] = useState('');
   const [areaReferences, setAreaReferences] = useState<AgentAreaReference[]>([]);
   const [areaError, setAreaError] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
   const dictating = useDictationState((state) => Boolean(state.activeId));
   const [captureDocument, setCaptureDocument] = useState<Document | null>(null);
   const pendingProposalId = useAgentReviewStore((state) => state.proposals[0]?.id);
@@ -53,8 +77,13 @@ export function AgentChatPanel() {
   const [dragActive, setDragActive] = useState(false);
   const dragDepthRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const connected = useAgentBridgeStatus((state) => state.connected);
-  const authoritative = useAgentBridgeStatus((state) => state.authoritative);
+  const aiMode = isAiChatEnabled();
+  const gatewayBridge = useGatewayBridgeStatus();
+  const localConnected = useAgentBridgeStatus((state) => state.connected);
+  const localAuthoritative = useAgentBridgeStatus((state) => state.authoritative);
+  const connected = aiMode ? gatewayBridge === 'connected' : localConnected;
+  const authoritative = aiMode ? gatewayBridge !== 'replaced' : localAuthoritative;
+  const token = useSouvToken();
   const chat = useAgentChatStore();
   const transcriptEntries = useMemo(
     () => chat.entries.filter((entry) => entry.kind !== 'tool' && entry.kind !== 'proposal'),
@@ -98,7 +127,39 @@ export function AgentChatPanel() {
     [areaReferences, manualReferences, selectedReferenceIds, selectedReferences],
   );
   const busy = Boolean(chat.activeTurnId);
-  const enabled = connected && authoritative && chat.configured === true;
+  // Worker-driven assistant (OG-092): no localhost bridge is required — the
+  // tab bridge carries the tool loop, and the worker reports config per turn.
+  const enabled = aiMode
+    ? !!token && gatewayBridge === 'connected' && chat.configured !== false
+    : connected && authoritative && chat.configured === true;
+  const login = () => {
+    // The token lives in the shared tab session (souvAuth): bridge, turns
+    // and cloud save all read the same source, so one login serves the
+    // whole tab. Guard against double-clicks opening a second popup.
+    if (loggingIn) return;
+    if (getSouvToken()) {
+      ensureBridgeForAI();
+      return;
+    }
+    setLoggingIn(true);
+    setLoginError('');
+    void loginWithSouvPopup()
+      .then((result) => {
+        if (!result && !getSouvToken()) {
+          setLoginError(
+            'Login finished without an assistant token. Use the Souv menu login instead.',
+          );
+        } else {
+          ensureBridgeForAI();
+        }
+      })
+      .catch((error) => {
+        setLoginError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        setLoggingIn(false);
+      });
+  };
   useEffect(() => {
     setAreaReferences([]);
     setAreaError('');
@@ -210,7 +271,9 @@ export function AgentChatPanel() {
           ? `${chat.provider} · ${chat.model}`
           : chat.configured === false
             ? 'Agent not configured'
-            : 'Checking agent configuration…'}
+            : aiMode
+              ? 'Workers AI'
+              : 'Checking agent configuration…'}
       </div>
       <AgentReviewPanel />
       <div className="agent-chat-concurrency">
@@ -231,8 +294,20 @@ export function AgentChatPanel() {
         <div className="agent-chat-notice error">
           This tab is not the active editor session. Reload it to make this tab authoritative.
         </div>
+      ) : aiMode && !token ? (
+        <div className="agent-chat-notice">
+          Log in to Souv to enable the AI assistant.
+          <button type="button" className="agent-login-button" onClick={login} disabled={loggingIn}>
+            {loggingIn ? 'Logging in…' : 'Log in'}
+          </button>
+          {loginError ? <span role="alert">{loginError}</span> : null}
+        </div>
       ) : !connected ? (
-        <div className="agent-chat-notice">The local OGraf Studio server is offline.</div>
+        <div className="agent-chat-notice">
+          {aiMode
+            ? 'The OGraf Studio server is offline.'
+            : 'The local OGraf Studio server is offline.'}
+        </div>
       ) : chat.configured === false ? (
         <div className="agent-chat-notice">
           {chat.configMessage ?? 'Configure a provider on the local server and restart it.'}

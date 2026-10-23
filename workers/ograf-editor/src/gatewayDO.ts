@@ -59,6 +59,58 @@ export class GatewayDO {
     if (request.headers.get('Upgrade') === 'websocket') {
       return this.#acceptBridge(url);
     }
+    // Internal tab-tool bridge for the worker AI chat route (OG-091).
+    // Same per-login isolation as MCP: the worker routes by token+tabId
+    // stub, and calls fan out to that tab with the same timeout semantics
+    // as `tools/call`.
+    if (url.pathname === '/internal/tool-call') {
+      if (request.method !== 'POST') {
+        return Response.json(
+          { ok: false, error: 'Method not allowed. Use POST.' },
+          { status: 405 },
+        );
+      }
+      const token = bearerToken(request);
+      if (!(await this.#valid(token))) {
+        return Response.json(
+          { ok: false, error: 'Missing or invalid Souv token.' },
+          { status: 401 },
+        );
+      }
+      let body: unknown;
+      try {
+        body = await request.json();
+      } catch {
+        return Response.json({ ok: false, error: 'Parse error' }, { status: 400 });
+      }
+      const record = (body ?? {}) as { name?: unknown; args?: unknown };
+      if (typeof record.name !== 'string' || !record.name) {
+        return Response.json({ ok: false, error: 'Missing tool name.' }, { status: 400 });
+      }
+      if (record.args !== undefined && (typeof record.args !== 'object' || record.args === null)) {
+        // Report only the received kind, never the value (args may carry
+        // project content).
+        const received = record.args === null ? 'null' : typeof record.args;
+        return Response.json(
+          { ok: false, error: 'Tool args must be an object (received ' + received + ').' },
+          { status: 400 },
+        );
+      }
+      try {
+        const result = await this.#callTab(
+          record.name as MCPToolName,
+          (record.args ?? {}) as Record<string, unknown>,
+        );
+        return Response.json({ ok: true, result: result });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const noTab = message === NO_TAB_MESSAGE;
+        return Response.json(
+          { ok: false, error: message, noTab: noTab },
+          { status: noTab ? 409 : 500 },
+        );
+      }
+    }
     if (request.method !== 'POST') {
       return Response.json({ error: 'Method not allowed. Use POST for MCP.' }, { status: 405 });
     }
@@ -151,6 +203,7 @@ export class GatewayDO {
     } catch {
       return;
     }
+    if (!message || typeof message !== 'object') return;
     if (message.type !== 'tool.result' || !message.callId) return;
     const pending = this.#pending.get(message.callId);
     if (!pending) return;
